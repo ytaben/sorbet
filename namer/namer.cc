@@ -12,6 +12,7 @@
 #include "common/concurrency/WorkerPool.h"
 #include "common/sort.h"
 #include "core/Context.h"
+#include "core/FileHash.h"
 #include "core/FoundDefinitions.h"
 #include "core/Names.h"
 #include "core/Symbols.h"
@@ -30,19 +31,19 @@ struct SymbolFinderResult {
     unique_ptr<core::FoundDefinitions> names;
 };
 
-core::ClassOrModuleRef methodOwner(core::Context ctx, const ast::MethodDef::Flags &flags) {
-    ENFORCE(ctx.owner.exists() && ctx.owner != core::Symbols::todo());
-    auto owner = ctx.owner.enclosingClass(ctx);
-    if (owner == core::Symbols::root()) {
+core::ClassOrModuleRef methodOwner(core::Context ctx, core::SymbolRef owner, bool isSelfMethod) {
+    ENFORCE(owner.exists() && owner != core::Symbols::todo());
+    auto enclosingClass = owner.enclosingClass(ctx);
+    if (enclosingClass == core::Symbols::root()) {
         // Root methods end up going on object
-        owner = core::Symbols::Object();
+        enclosingClass = core::Symbols::Object();
     }
 
-    if (flags.isSelfMethod) {
-        owner = owner.data(ctx)->lookupSingletonClass(ctx);
+    if (isSelfMethod) {
+        enclosingClass = enclosingClass.data(ctx)->lookupSingletonClass(ctx);
     }
-    ENFORCE(owner.exists());
-    return owner;
+    ENFORCE(enclosingClass.exists());
+    return enclosingClass;
 }
 
 // Returns the SymbolRef corresponding to the class `self.class`, unless the
@@ -449,7 +450,10 @@ public:
  */
 class SymbolDefiner {
     const core::FoundDefinitions foundDefs;
+    const optional<core::FoundMethodHashes> oldFoundMethodHashes;
+    // See getOwnerSymbol
     vector<core::ClassOrModuleRef> definedClasses;
+    // See getOwnerSymbol
     vector<core::MethodRef> definedMethods;
 
     // Returns a symbol to the referenced name. Name must be a class or module.
@@ -732,7 +736,7 @@ class SymbolDefiner {
     }
 
     core::MethodRef defineMethod(core::MutableContext ctx, const core::FoundMethod &method) {
-        auto owner = methodOwner(ctx, method.flags);
+        auto owner = methodOwner(ctx, ctx.owner, method.flags.isSelfMethod);
 
         // There are three symbols in play here, because there's:
         //
@@ -1130,8 +1134,70 @@ class SymbolDefiner {
         }
     }
 
+    // TODO(jez) This is a lot of GlobalState-looking code. Should we move it there?
+    void mangleRenameViaFullNameHash(core::MutableContext ctx, const core::FoundMethodHash &oldDefHash) {
+        auto ownerRef = core::FoundDefinitionRef(core::FoundDefinitionRef::Kind::Class, oldDefHash.ownerIdx);
+        ENFORCE(oldDefHash.nameHash.isDefined(), "Can't mangle rename if old hash is not defined");
+        ctx.state.tracer().debug("yep 🙂");
+
+        // Because a change to classes would have take the slow path, should be safe
+        // to look up old owner in current foundDefs.
+        auto ownerSymbol = getOwnerSymbol(ownerRef);
+        ENFORCE(ownerSymbol.isClassOrModule());
+        auto owner = methodOwner(ctx, ownerSymbol, oldDefHash.isSelfMethod);
+        auto oldMethod = core::Symbols::noMethod();
+        for (const auto &[memberName, memberSym] : owner.data(ctx)->members()) {
+            if (!memberSym.isMethod()) {
+                continue;
+            }
+
+            auto memberNameToHash = memberName;
+            if (memberNameToHash.kind() == core::NameKind::UNIQUE) {
+                auto &uniqueData = memberNameToHash.dataUnique(ctx);
+                if (uniqueData->uniqueNameKind == core::UniqueNameKind::MangleRename) {
+                    memberNameToHash = uniqueData->original;
+                }
+            }
+
+            auto memberFullNameHash = core::FullNameHash(ctx, memberNameToHash);
+            if (memberFullNameHash != oldDefHash.nameHash) {
+                continue;
+            }
+
+            auto memberMethod = memberSym.asMethodRef();
+            if (memberMethod.data(ctx)->methodArgumentHash(ctx) == oldDefHash.arityHash) {
+                oldMethod = memberMethod;
+                break;
+            }
+        }
+        if (!oldMethod.exists()) {
+            // TODO(jez) Is this still true after the changes we made to the above loop, where we
+            // ignore unique name but check for matching arity?
+            // If the oldMethod doesn't exist, it was already mangle renamed. For example, if the
+            // oldFoundMethodHashes contained [foo, foo], we would try to mangle rename `foo` twice.
+            // The second time, `oldMethod` won't exist.
+            return;
+        }
+
+        // TODO(jez) Find somewhere appropriate for this comment
+        // Only mangle if the thing we found had the hash we expected to find.
+        // If we found something else, it likely means that even though there was previously a FoundMethod
+        // that would have caused a method with this name to be defined, it was mangle renamed and a
+        // different method with the same name took its place (that other method might not have been deleted,
+        // but if it was, we'll get to mangle renaming it on some future iteration.)
+        const auto &locs = oldMethod.data(ctx)->locs();
+        if (locs.size() <= 1) {
+            ctx.state.deleteMethodSymbol(oldMethod);
+        } else {
+            // TODO(jez) Double check that if you end up removing all references in all files on a
+            // fast path, that the method does in fact get deleted.
+            oldMethod.data(ctx)->removeLocsForFile(ctx.file);
+        }
+    }
+
 public:
-    SymbolDefiner(unique_ptr<core::FoundDefinitions> foundDefs) : foundDefs(move(*foundDefs)) {}
+    SymbolDefiner(unique_ptr<core::FoundDefinitions> foundDefs, optional<core::FoundMethodHashes> oldFoundMethodHashes)
+        : foundDefs(move(*foundDefs)), oldFoundMethodHashes(move(oldFoundMethodHashes)) {}
 
     void run(core::MutableContext ctx) {
         definedClasses.reserve(foundDefs.klasses().size());
@@ -1139,6 +1205,15 @@ public:
 
         for (auto ref : foundDefs.nonMethodDefinitions()) {
             defineNonMethodSingle(ctx, ref);
+        }
+
+        if (oldFoundMethodHashes.has_value()) {
+            for (const auto &oldMethodHash : oldFoundMethodHashes.value()) {
+                // Since we've already processed all the non-method symbols (which includes classes), we now
+                // guarantee that mangleRenameViaFullNameHash can use getOwnerSymbol to lookup an old owner
+                // ref in the new definedClasses vector.
+                mangleRenameViaFullNameHash(ctx, oldMethodHash);
+            }
         }
 
         for (auto &method : foundDefs.methods()) {
@@ -1158,6 +1233,14 @@ public:
                     modifyConstant(ctx.withOwner(owner), modifier);
                     break;
             }
+        }
+    }
+
+    void populateFoundMethodHashes(core::Context ctx, core::FoundMethodHashes &foundMethodHashesOut) {
+        for (const auto &method : foundDefs.methods()) {
+            auto owner = method.owner;
+            auto fullNameHash = core::FullNameHash(ctx, method.name);
+            foundMethodHashesOut.emplace_back(owner.idx(), fullNameHash, method.argsHash, method.flags.isSelfMethod);
         }
     }
 };
@@ -1448,7 +1531,7 @@ public:
     ast::ExpressionPtr preTransformMethodDef(core::Context ctx, ast::ExpressionPtr tree) {
         auto &method = ast::cast_tree_nonnull<ast::MethodDef>(tree);
 
-        auto owner = methodOwner(ctx, method.flags);
+        auto owner = methodOwner(ctx, ctx.owner, method.flags.isSelfMethod);
         auto parsedArgs = ast::ArgParsing::parseArgs(method.args);
         auto sym = ctx.state.lookupMethodSymbolWithHash(owner, method.name, ast::ArgParsing::hashArgs(ctx, parsedArgs));
         if (!sym.exists()) {
@@ -1779,8 +1862,10 @@ vector<SymbolFinderResult> findSymbols(const core::GlobalState &gs, vector<ast::
     return allFoundDefinitions;
 }
 
-ast::ParsedFilesOrCancelled defineSymbols(core::GlobalState &gs, vector<SymbolFinderResult> allFoundDefinitions,
-                                          WorkerPool &workers) {
+ast::ParsedFilesOrCancelled
+defineSymbols(core::GlobalState &gs, vector<SymbolFinderResult> allFoundDefinitions, WorkerPool &workers,
+              UnorderedMap<core::FileRef, core::FoundMethodHashes> &&oldFoundMethodHashesForFiles,
+              core::FoundMethodHashes *foundMethodHashesOut) {
     Timer timeit(gs.tracer(), "naming.defineSymbols");
     vector<ast::ParsedFile> output;
     output.reserve(allFoundDefinitions.size());
@@ -1797,10 +1882,17 @@ ast::ParsedFilesOrCancelled defineSymbols(core::GlobalState &gs, vector<SymbolFi
             }
             return ast::ParsedFilesOrCancelled::cancel(move(output), workers);
         }
-        core::MutableContext ctx(gs, core::Symbols::root(), fileFoundDefinitions.tree.file);
-        SymbolDefiner symbolDefiner(move(fileFoundDefinitions.names));
+        auto fref = fileFoundDefinitions.tree.file;
+        core::MutableContext ctx(gs, core::Symbols::root(), fref);
+        auto oldFoundMethodHashes = oldFoundMethodHashesForFiles.find(fref) == oldFoundMethodHashesForFiles.end()
+                                        ? optional<core::FoundMethodHashes>()
+                                        : std::move(oldFoundMethodHashesForFiles[fref]);
+        SymbolDefiner symbolDefiner(move(fileFoundDefinitions.names), move(oldFoundMethodHashes));
         output.emplace_back(move(fileFoundDefinitions.tree));
         symbolDefiner.run(ctx);
+        if (foundMethodHashesOut != nullptr) {
+            symbolDefiner.populateFoundMethodHashes(ctx, *foundMethodHashesOut);
+        }
     }
     prodCounterAdd("types.input.foundmethods.total", foundMethods);
     return output;
@@ -1867,7 +1959,8 @@ ast::ParsedFilesOrCancelled Namer::symbolizeTreesBestEffort(const core::GlobalSt
     return symbolizeTrees(gs, move(trees), workers, bestEffort);
 }
 
-ast::ParsedFilesOrCancelled Namer::run(core::GlobalState &gs, vector<ast::ParsedFile> trees, WorkerPool &workers) {
+ast::ParsedFilesOrCancelled Namer::run(core::GlobalState &gs, vector<ast::ParsedFile> trees, WorkerPool &workers,
+                                       core::FoundMethodHashes *foundMethodHashesOut) {
     auto foundDefs = findSymbols(gs, move(trees), workers);
     if (gs.epochManager->wasTypecheckingCanceled()) {
         trees.reserve(foundDefs.size());
@@ -1876,7 +1969,40 @@ ast::ParsedFilesOrCancelled Namer::run(core::GlobalState &gs, vector<ast::Parsed
         }
         return ast::ParsedFilesOrCancelled::cancel(move(trees), workers);
     }
-    auto result = defineSymbols(gs, move(foundDefs), workers);
+    if (foundMethodHashesOut != nullptr) {
+        ENFORCE(foundDefs.size() == 1,
+                "Producing foundMethodHashes is meant to only happen when hashing a single file");
+    }
+    // There were no old FoundMethodHashes; just defineSymbols like normal.
+    auto oldFoundMethodHashesForFiles = UnorderedMap<core::FileRef, core::FoundMethodHashes>{};
+    auto result =
+        defineSymbols(gs, move(foundDefs), workers, std::move(oldFoundMethodHashesForFiles), foundMethodHashesOut);
+    if (!result.hasResult()) {
+        return result;
+    }
+    auto bestEffort = false;
+    trees = symbolizeTrees(gs, move(result.result()), workers, bestEffort);
+    return trees;
+}
+
+ast::ParsedFilesOrCancelled
+Namer::runIncremental(core::GlobalState &gs, std::vector<ast::ParsedFile> trees,
+                      UnorderedMap<core::FileRef, core::FoundMethodHashes> &&oldFoundMethodHashesForFiles,
+                      WorkerPool &workers) {
+    // TODO(jez) Clever way to de-dup this with Namer::run ?
+    auto foundDefs = findSymbols(gs, move(trees), workers);
+    if (gs.epochManager->wasTypecheckingCanceled()) {
+        trees.reserve(foundDefs.size());
+        for (auto &def : foundDefs) {
+            trees.emplace_back(move(def.tree));
+        }
+        return ast::ParsedFilesOrCancelled::cancel(move(trees), workers);
+    }
+
+    // We should never be combining Namer::runIncremental with the namer call that produces FileHashes
+    auto foundMethodHashesOut = nullptr;
+    auto result =
+        defineSymbols(gs, move(foundDefs), workers, std::move(oldFoundMethodHashesForFiles), foundMethodHashesOut);
     if (!result.hasResult()) {
         return result;
     }

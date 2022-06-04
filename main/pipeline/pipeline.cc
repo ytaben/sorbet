@@ -224,8 +224,10 @@ ast::ParsedFile indexOne(const options::Options &opts, core::GlobalState &lgs, c
     }
 }
 
-vector<ast::ParsedFile> incrementalResolve(core::GlobalState &gs, vector<ast::ParsedFile> what,
-                                           const options::Options &opts) {
+vector<ast::ParsedFile>
+incrementalResolve(core::GlobalState &gs, vector<ast::ParsedFile> what,
+                   optional<UnorderedMap<core::FileRef, core::FoundMethodHashes>> &&foundMethodHashesForFiles,
+                   const options::Options &opts) {
     try {
 #ifndef SORBET_REALMAIN_MIN
         if (opts.stripePackages) {
@@ -239,7 +241,11 @@ vector<ast::ParsedFile> incrementalResolve(core::GlobalState &gs, vector<ast::Pa
             core::UnfreezeNameTable nameTable(gs);
             auto emptyWorkers = WorkerPool::create(0, gs.tracer());
 
-            auto result = sorbet::namer::Namer::run(gs, move(what), *emptyWorkers);
+            auto result = foundMethodHashesForFiles.has_value()
+                              ? sorbet::namer::Namer::runIncremental(
+                                    gs, move(what), std::move(foundMethodHashesForFiles.value()), *emptyWorkers)
+                              : sorbet::namer::Namer::run(gs, move(what), *emptyWorkers, nullptr);
+
             // Cancellation cannot occur during incremental namer.
             ENFORCE(result.hasResult());
             what = move(result.result());
@@ -756,11 +762,11 @@ ast::ParsedFilesOrCancelled nameBestEffortConst(const core::GlobalState &gs, vec
 }
 
 ast::ParsedFilesOrCancelled name(core::GlobalState &gs, vector<ast::ParsedFile> what, const options::Options &opts,
-                                 WorkerPool &workers) {
+                                 WorkerPool &workers, core::FoundMethodHashes *foundMethodHashes) {
     Timer timeit(gs.tracer(), "name");
     core::UnfreezeNameTable nameTableAccess(gs);     // creates singletons and class names
     core::UnfreezeSymbolTable symbolTableAccess(gs); // enters symbols
-    auto result = namer::Namer::run(gs, move(what), workers);
+    auto result = namer::Namer::run(gs, move(what), workers, foundMethodHashes);
 
     return result;
 }
@@ -844,12 +850,13 @@ ast::ParsedFile checkNoDefinitionsInsideProhibitedLines(core::GlobalState &gs, a
 }
 
 ast::ParsedFilesOrCancelled resolve(unique_ptr<core::GlobalState> &gs, vector<ast::ParsedFile> what,
-                                    const options::Options &opts, WorkerPool &workers) {
+                                    const options::Options &opts, WorkerPool &workers,
+                                    core::FoundMethodHashes *foundMethodHashes) {
     try {
         // packager intentionally runs outside of rewriter so that its output does not get cached.
         what = package(*gs, move(what), opts, workers);
 
-        auto result = name(*gs, move(what), opts, workers);
+        auto result = name(*gs, move(what), opts, workers, foundMethodHashes);
         if (!result.hasResult()) {
             return result;
         }
@@ -898,7 +905,14 @@ ast::ParsedFilesOrCancelled resolve(unique_ptr<core::GlobalState> &gs, vector<as
                     auto reIndexed = indexOne(opts, *gs, f.file);
                     vector<ast::ParsedFile> toBeReResolved;
                     toBeReResolved.emplace_back(move(reIndexed));
-                    auto reresolved = pipeline::incrementalResolve(*gs, move(toBeReResolved), opts);
+                    // TODO(jez) It's an open question what we want the behavior of `--stress-incremental-resolver` to
+                    // be. On the one hand, LSPTypechecker::getResolved will _not_ use Namer::runIncremental.
+                    // On the other, if we don't test it in `--stress-incremental-resolver`, we'll have to write
+                    // extra tests to be sure of correctness, because pipeline tests won't test our feature for free.
+                    // TODO(jez) Once you've made a decision, explain what `nullopt` means here for posterity
+                    auto foundMethodHashesForFiles = nullopt;
+                    auto reresolved =
+                        pipeline::incrementalResolve(*gs, move(toBeReResolved), foundMethodHashesForFiles, opts);
                     ENFORCE(reresolved.size() == 1);
                     f = checkNoDefinitionsInsideProhibitedLines(*gs, move(reresolved[0]), 0, prohibitedLines);
                 }
