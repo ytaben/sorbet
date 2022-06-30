@@ -436,6 +436,7 @@ NameDef names[] = {
     {"test_import"},
     {"export_", "export"},
     {"restrict_to_service"},
+    {"visible_to"},
     {"PackageSpec", "PackageSpec", true},
     {"PackageSpecRegistry", "<PackageSpecRegistry>", true},
 
