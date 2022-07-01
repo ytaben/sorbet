@@ -8,6 +8,8 @@ class <C <U <root>>> < <C <U Object>> ()
     static-field <C <U LetErrors>>::<U @@dv> -> Symbol @ Loc {file=test/testdata/resolver/let_errors.rb start=23:3 end=23:7}
     static-field <C <U LetErrors>>::<U @@topvar> -> Integer @ Loc {file=test/testdata/resolver/let_errors.rb start=3:3 end=3:11}
     field <C <U LetErrors>>#<U @a> -> Integer @ Loc {file=test/testdata/resolver/let_errors.rb start=11:5 end=11:7}
+    field <C <U LetErrors>>#<U @b> -> <todo sym> @ Loc {file=test/testdata/resolver/let_errors.rb start=14:3 end=14:5}
+    field <C <U LetErrors>>#<U @d> -> <todo sym> @ Loc {file=test/testdata/resolver/let_errors.rb start=20:3 end=20:5}
     field <C <U LetErrors>>#<U @ivar> -> Integer @ Loc {file=test/testdata/resolver/let_errors.rb start=7:5 end=7:10}
     method <C <U LetErrors>>#<U initialize> (<blk>) @ Loc {file=test/testdata/resolver/let_errors.rb start=5:3 end=5:17}
       argument <blk><block> @ Loc {file=test/testdata/resolver/let_errors.rb start=??? end=???}

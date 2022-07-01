@@ -29,6 +29,32 @@
             },
             "children": [
                 {
+                    "name": "@foo",
+                    "detail": "",
+                    "kind": 8,
+                    "range": {
+                        "start": {
+                            "line": 2,
+                            "character": 2
+                        },
+                        "end": {
+                            "line": 2,
+                            "character": 6
+                        }
+                    },
+                    "selectionRange": {
+                        "start": {
+                            "line": 2,
+                            "character": 2
+                        },
+                        "end": {
+                            "line": 2,
+                            "character": 6
+                        }
+                    },
+                    "children": []
+                },
+                {
                     "name": "self.@foo",
                     "detail": "",
                     "kind": 8,

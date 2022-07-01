@@ -16,7 +16,7 @@ class <emptyTree><<C <root>>> < (::<todo sym>)
     end
 
     def initialize<<todo method>>(value, &<blk>)
-      @value = <emptyTree>::<C T>.let(value, <emptyTree>::<C Integer>)
+      @value = T.let(value, <todo sym>)
     end
 
     <self>.extend(<emptyTree>::<C T>::<C Sig>)
@@ -84,7 +84,7 @@ class <emptyTree><<C <root>>> < (::<todo sym>)
     end
 
     def initialize<<todo method>>(value, &<blk>)
-      @value = <emptyTree>::<C T>.let(value, <emptyTree>::<C Integer>)
+      @value = T.let(value, <todo sym>)
     end
 
     <self>.extend(<emptyTree>::<C T>::<C Sig>)
