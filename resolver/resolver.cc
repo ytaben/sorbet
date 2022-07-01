@@ -2728,6 +2728,16 @@ public:
         }
     }
 
+    void postTransformCast(core::Context ctx, ast::ExpressionPtr &tree) {
+        ResolveCastItem item;
+        item.file = ctx.file;
+        item.owner = ctx.owner.enclosingClass(ctx);
+        item.cast = ast::cast_tree<ast::Cast>(tree);
+        if (!tryResolveSimpleClassCastItem(ctx.withOwner(item.owner), item)) {
+            todoResolveCastItems_.emplace_back(move(item));
+        }
+    }
+
     void postTransformSend(core::Context ctx, ast::ExpressionPtr &tree) {
         auto &send = ast::cast_tree_nonnull<ast::Send>(tree);
 
