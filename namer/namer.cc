@@ -477,8 +477,42 @@ public:
         return foundRef;
     }
 
+    // Returns `true` if `asgn` is a field declaration.
+    bool handleFieldDeclaration(core::Context ctx, ast::Assign &asgn) {
+        auto *uid = ast::cast_tree<ast::UnresolvedIdent>(asgn.lhs);
+        if (uid == nullptr) {
+            return false;
+        }
+
+        if (uid->kind != ast::UnresolvedIdent::Kind::Instance && uid->kind != ast::UnresolvedIdent::Kind::Class) {
+            return false;
+        }
+
+        auto *cast = ast::cast_tree<ast::Cast>(asgn.rhs);
+        if (cast == nullptr) {
+            return false;
+        }
+
+        // This is an error in resolver, but just ignore this here.
+        if (cast->cast != core::Names::let()) {
+            return false;
+        }
+
+        core::FoundField found;
+        found.kind = uid->kind == ast::UnresolvedIdent::Kind::Instance ? core::FoundField::Kind::Instance : core::FoundField::Kind::Class;
+        found.owner = getOwner();
+        found.loc = uid->loc;
+        found.name = uid->name;
+        foundDefs->addField(move(found));
+        return true;
+    }
+
     void postTransformAssign(core::Context ctx, ast::ExpressionPtr &tree) {
         auto &asgn = ast::cast_tree_nonnull<ast::Assign>(tree);
+
+        if (handleFieldDeclaration(ctx, asgn)) {
+            return;
+        }
 
         auto *lhs = ast::cast_tree<ast::UnresolvedConstantLit>(asgn.lhs);
         if (lhs == nullptr) {
@@ -1048,6 +1082,47 @@ class SymbolDefiner {
         }
     }
 
+    core::FieldRef insertField(core::MutableContext ctx, const core::FoundField &field) {
+        // TODO(froydnj): resolver handles this as an error, so maybe we can't enforce this?
+        ENFORCE(ctx.owner.isClassOrModule());
+
+        core::ClassOrModuleRef owner = ctx.owner.asClassOrModuleRef();
+        core::ClassOrModuleRef scope;
+
+        // resolver checks a whole bunch of various error conditions here; we just want to
+        // know where to define the field.
+        if (field.kind == core::FoundField::Kind::Class) {
+            scope = ctx.owner.enclosingClass(ctx);
+        } else {
+            scope = ctx.selfClass();
+        }
+
+        auto existing = ctx.state.lookupFieldSymbol(owner, field.name);
+        if (existing.exists()) {
+            // There was a previous declaration of this field in this file.  Ignore it;
+            // let resolver deal with issuing the appropriate errors.
+            if (existing.data(ctx)->resultType == core::Types::todo()) {
+                return existing;
+            }
+
+            // We are on the fast path and there was a previous declaration.
+            // TODO(froydnj) apparently incremental resolve can't add new symbols?!
+            //ctx.state.mangleRenameSymbol(existing, existing.data(ctx)->name);
+            existing.data(ctx)->resultType = core::Types::todo();
+            return existing;
+        }
+
+        core::FieldRef sym;
+        if (field.kind == core::FoundField::Kind::Instance) {
+            sym = ctx.state.enterFieldSymbol(ctx.locAt(field.loc), owner, field.name);
+        } else {
+            sym = ctx.state.enterStaticFieldSymbol(ctx.locAt(field.loc), owner, field.name);
+        }
+
+        sym.data(ctx)->resultType = core::Types::todo();
+        return sym;
+    }
+
     core::FieldRef insertStaticField(core::MutableContext ctx, const core::FoundStaticField &staticField) {
         ENFORCE(ctx.owner.isClassOrModule());
 
@@ -1195,6 +1270,11 @@ class SymbolDefiner {
             case core::FoundDefinitionRef::Kind::TypeMember: {
                 const auto &typeMember = ref.typeMember(foundDefs);
                 insertTypeMember(ctx.withOwner(getOwnerSymbol(typeMember.owner)), typeMember);
+                break;
+            }
+            case core::FoundDefinitionRef::Kind::Field: {
+                const auto &field = ref.field(foundDefs);
+                insertField(ctx.withOwner(getOwnerSymbol(field.owner)), field);
                 break;
             }
             default:
