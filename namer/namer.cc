@@ -195,7 +195,26 @@ public:
     void preTransformMethodDef(core::Context ctx, ast::ExpressionPtr &tree) {
         auto &method = ast::cast_tree_nonnull<ast::MethodDef>(tree);
         core::FoundMethod foundMethod;
-        foundMethod.owner = getOwner();
+        core::FoundDefinitionRef owner = getOwner();
+        if (method.flags.isSelfMethod) {
+            core::LocOffsets loc = core::LocOffsets::none();
+            switch (owner.kind()) {
+            case core::FoundDefinitionRef::Kind::Symbol:
+                // TODO(froydnj) what if this isn't a class?
+                loc = owner.symbol().asClassOrModuleRef().data(ctx)->loc().offsets();
+                break;
+            case core::FoundDefinitionRef::Kind::Class:
+                loc = owner.klass(*foundDefs).loc;
+                break;
+            default:
+                break;
+            }
+            core::FoundClassRef singleton;
+            singleton.name = core::Names::singleton();
+            singleton.loc = loc;
+            owner = foundDefs->addClassRef(move(singleton));
+        }
+        foundMethod.owner = owner;
         foundMethod.name = method.name;
         foundMethod.loc = method.loc;
         foundMethod.declLoc = method.declLoc;
@@ -207,11 +226,13 @@ public:
         // After flatten, method defs have been hoisted and reordered, so instead we look for the
         // keep_def / keep_self_def calls, which will still be ordered correctly relative to
         // visibility modifiers.
+        //ownerStack.emplace_back(owner);
         methodVisiStack.emplace_back(nullopt);
     }
 
     void postTransformMethodDef(core::Context ctx, ast::ExpressionPtr &tree) {
         methodVisiStack.pop_back();
+        //ownerStack.pop_back();
     }
 
     void postTransformSend(core::Context ctx, ast::ExpressionPtr &tree) {
@@ -1277,8 +1298,12 @@ class SymbolDefiner {
                 insertField(ctx.withOwner(getOwnerSymbol(field.owner)), field);
                 break;
             }
+        case core::FoundDefinitionRef::Kind::ClassRef: {
+            ENFORCE(false, "unhandled class ref");
+            break;
+        }
             default:
-                ENFORCE(false);
+                ENFORCE(false, "unhandled other kind");
                 break;
         }
     }
