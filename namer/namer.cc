@@ -589,7 +589,7 @@ class SymbolDefiner {
     }
 
     // Get the symbol for an already-defined owner. Limited to refs that can own things (classes and methods).
-    core::SymbolRef getOwnerSymbol(core::FoundDefinitionRef ref) {
+    core::SymbolRef getOwnerSymbol(core::MutableContext ctx, core::FoundDefinitionRef ref) {
         switch (ref.kind()) {
             case core::FoundDefinitionRef::Kind::Symbol:
                 return ref.symbol();
@@ -599,6 +599,9 @@ class SymbolDefiner {
             case core::FoundDefinitionRef::Kind::Method:
                 ENFORCE(ref.idx() < definedMethods.size());
                 return definedMethods[ref.idx()];
+            case core::FoundDefinitionRef::Kind::ClassRef:
+                ENFORCE(ref.klassRef(foundDefs).name == core::Names::singleton());
+                return ctx.owner.data(ctx)->singletonClass(ctx);
             default:
                 Exception::raise("Invalid owner reference");
         }
@@ -1280,22 +1283,22 @@ class SymbolDefiner {
             case core::FoundDefinitionRef::Kind::Class: {
                 const auto &klass = ref.klass(foundDefs);
                 ENFORCE(definedClasses.size() == ref.idx());
-                definedClasses.emplace_back(insertClass(ctx.withOwner(getOwnerSymbol(klass.owner)), klass));
+                definedClasses.emplace_back(insertClass(ctx.withOwner(getOwnerSymbol(ctx, klass.owner)), klass));
                 break;
             }
             case core::FoundDefinitionRef::Kind::StaticField: {
                 const auto &staticField = ref.staticField(foundDefs);
-                insertStaticField(ctx.withOwner(getOwnerSymbol(staticField.owner)), staticField);
+                insertStaticField(ctx.withOwner(getOwnerSymbol(ctx, staticField.owner)), staticField);
                 break;
             }
             case core::FoundDefinitionRef::Kind::TypeMember: {
                 const auto &typeMember = ref.typeMember(foundDefs);
-                insertTypeMember(ctx.withOwner(getOwnerSymbol(typeMember.owner)), typeMember);
+                insertTypeMember(ctx.withOwner(getOwnerSymbol(ctx, typeMember.owner)), typeMember);
                 break;
             }
             case core::FoundDefinitionRef::Kind::Field: {
                 const auto &field = ref.field(foundDefs);
-                insertField(ctx.withOwner(getOwnerSymbol(field.owner)), field);
+                insertField(ctx.withOwner(getOwnerSymbol(ctx, field.owner)), field);
                 break;
             }
         case core::FoundDefinitionRef::Kind::ClassRef: {
@@ -1325,11 +1328,11 @@ public:
                 // alias methods will be defined in resolver.
                 continue;
             }
-            definedMethods.emplace_back(insertMethod(ctx.withOwner(getOwnerSymbol(method.owner)), method));
+            definedMethods.emplace_back(insertMethod(ctx.withOwner(getOwnerSymbol(ctx, method.owner)), method));
         }
 
         for (const auto &modifier : foundDefs.modifiers()) {
-            const auto owner = getOwnerSymbol(modifier.owner);
+            const auto owner = getOwnerSymbol(ctx, modifier.owner);
             switch (modifier.kind) {
                 case core::FoundModifier::Kind::Method:
                     modifyMethod(ctx.withOwner(owner), modifier);
