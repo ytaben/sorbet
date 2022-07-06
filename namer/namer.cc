@@ -35,7 +35,7 @@ void swap(SymbolFinderResult &a, SymbolFinderResult &b) {
     a.names.swap(b.names);
 }
 
-core::ClassOrModuleRef methodOwner(core::Context ctx, const ast::MethodDef::Flags &flags) {
+core::ClassOrModuleRef methodOwner(core::Context ctx, bool singletonContext) {
     ENFORCE(ctx.owner.exists() && ctx.owner != core::Symbols::todo());
     auto owner = ctx.owner.enclosingClass(ctx);
     if (owner == core::Symbols::root()) {
@@ -43,7 +43,7 @@ core::ClassOrModuleRef methodOwner(core::Context ctx, const ast::MethodDef::Flag
         owner = core::Symbols::Object();
     }
 
-    if (flags.isSelfMethod) {
+    if (singletonContext) {
         owner = owner.data(ctx)->lookupSingletonClass(ctx);
     }
     ENFORCE(owner.exists());
@@ -601,7 +601,7 @@ class SymbolDefiner {
                 return definedMethods[ref.idx()];
             case core::FoundDefinitionRef::Kind::ClassRef:
                 ENFORCE(ref.klassRef(foundDefs).name == core::Names::singleton());
-                return ctx.owner.data(ctx)->singletonClass(ctx);
+                return methodOwner(ctx, /*singletonContext=*/true);
             default:
                 Exception::raise("Invalid owner reference");
         }
@@ -852,7 +852,7 @@ class SymbolDefiner {
     }
 
     core::MethodRef defineMethod(core::MutableContext ctx, const core::FoundMethod &method) {
-        auto owner = methodOwner(ctx, method.flags);
+        auto owner = methodOwner(ctx, method.flags.isSelfMethod);
 
         // There are three symbols in play here, because there's:
         //
@@ -1631,7 +1631,7 @@ public:
     void preTransformMethodDef(core::Context ctx, ast::ExpressionPtr &tree) {
         auto &method = ast::cast_tree_nonnull<ast::MethodDef>(tree);
 
-        auto owner = methodOwner(ctx, method.flags);
+        auto owner = methodOwner(ctx, method.flags.isSelfMethod);
         auto parsedArgs = ast::ArgParsing::parseArgs(method.args);
         auto sym = ctx.state.lookupMethodSymbolWithHash(owner, method.name, ast::ArgParsing::hashArgs(ctx, parsedArgs));
         if (!sym.exists()) {
