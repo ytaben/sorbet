@@ -226,13 +226,13 @@ public:
         // After flatten, method defs have been hoisted and reordered, so instead we look for the
         // keep_def / keep_self_def calls, which will still be ordered correctly relative to
         // visibility modifiers.
-        //ownerStack.emplace_back(owner);
+        ownerStack.emplace_back(owner);
         methodVisiStack.emplace_back(nullopt);
     }
 
     void postTransformMethodDef(core::Context ctx, ast::ExpressionPtr &tree) {
         methodVisiStack.pop_back();
-        //ownerStack.pop_back();
+        ownerStack.pop_back();
     }
 
     void postTransformSend(core::Context ctx, ast::ExpressionPtr &tree) {
