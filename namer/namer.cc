@@ -195,6 +195,7 @@ public:
     void preTransformMethodDef(core::Context ctx, ast::ExpressionPtr &tree) {
         auto &method = ast::cast_tree_nonnull<ast::MethodDef>(tree);
         core::FoundMethod foundMethod;
+        core::FoundDefinitionRef origOwner = getOwner();
         core::FoundDefinitionRef owner = getOwner();
         if (method.flags.isSelfMethod) {
             core::LocOffsets loc = core::LocOffsets::none();
@@ -214,7 +215,7 @@ public:
             singleton.loc = loc;
             owner = foundDefs->addClassRef(move(singleton));
         }
-        foundMethod.owner = owner;
+        foundMethod.owner = origOwner;
         foundMethod.name = method.name;
         foundMethod.loc = method.loc;
         foundMethod.declLoc = method.declLoc;
