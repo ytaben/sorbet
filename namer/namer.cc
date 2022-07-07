@@ -1099,19 +1099,20 @@ class SymbolDefiner {
             scope = ctx.selfClass();
         }
 
-        auto existing = ctx.state.lookupFieldSymbol(scope, field.name);
-        if (existing.exists()) {
+        auto existing = scope.data(ctx)->findMember(ctx, field.name);
+        if (existing.exists() && existing.isFieldOrStaticField()) {
+            auto prior = existing.asFieldRef();
             // There was a previous declaration of this field in this file.  Ignore it;
             // let resolver deal with issuing the appropriate errors.
-            if (existing.data(ctx)->resultType == core::Types::todo()) {
-                return existing;
+            if (prior.data(ctx)->resultType == core::Types::todo()) {
+                return prior;
             }
 
             // We are on the fast path and there was a previous declaration.
             // TODO(froydnj) apparently incremental resolve can't add new symbols?!
             //ctx.state.mangleRenameSymbol(existing, existing.data(ctx)->name);
-            existing.data(ctx)->resultType = core::Types::todo();
-            return existing;
+            prior.data(ctx)->resultType = core::Types::todo();
+            return prior;
         }
 
         core::FieldRef sym;
