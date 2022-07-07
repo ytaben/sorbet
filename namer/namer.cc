@@ -195,39 +195,20 @@ public:
     void preTransformMethodDef(core::Context ctx, ast::ExpressionPtr &tree) {
         auto &method = ast::cast_tree_nonnull<ast::MethodDef>(tree);
         core::FoundMethod foundMethod;
-        core::FoundDefinitionRef origOwner = getOwner();
         core::FoundDefinitionRef owner = getOwner();
-        if (method.flags.isSelfMethod) {
-            core::LocOffsets loc = core::LocOffsets::none();
-            switch (owner.kind()) {
-            case core::FoundDefinitionRef::Kind::Symbol:
-                // TODO(froydnj) what if this isn't a class?
-                loc = owner.symbol().asClassOrModuleRef().data(ctx)->loc().offsets();
-                break;
-            case core::FoundDefinitionRef::Kind::Class:
-                loc = owner.klass(*foundDefs).loc;
-                break;
-            default:
-                break;
-            }
-            core::FoundClassRef singleton;
-            singleton.name = core::Names::singleton();
-            singleton.loc = loc;
-            owner = foundDefs->addClassRef(move(singleton));
-        }
-        foundMethod.owner = origOwner;
+        foundMethod.owner = owner;
         foundMethod.name = method.name;
         foundMethod.loc = method.loc;
         foundMethod.declLoc = method.declLoc;
         foundMethod.flags = method.flags;
         foundMethod.parsedArgs = ast::ArgParsing::parseArgs(method.args);
         foundMethod.arityHash = ast::ArgParsing::hashArgs(ctx, foundMethod.parsedArgs);
-        foundDefs->addMethod(move(foundMethod));
+        auto def = foundDefs->addMethod(move(foundMethod));
 
         // After flatten, method defs have been hoisted and reordered, so instead we look for the
         // keep_def / keep_self_def calls, which will still be ordered correctly relative to
         // visibility modifiers.
-        ownerStack.emplace_back(owner);
+        ownerStack.emplace_back(def);
         methodVisiStack.emplace_back(nullopt);
     }
 
@@ -1108,9 +1089,6 @@ class SymbolDefiner {
     }
 
     core::FieldRef insertField(core::MutableContext ctx, const core::FoundField &field) {
-        // TODO(froydnj): resolver handles this as an error, so maybe we can't enforce this?
-        ENFORCE(ctx.owner.isClassOrModule());
-
         core::ClassOrModuleRef scope;
 
         // resolver checks a whole bunch of various error conditions here; we just want to
@@ -1319,7 +1297,11 @@ public:
         definedMethods.reserve(foundDefs.methods().size());
 
         for (auto ref : foundDefs.nonMethodDefinitions()) {
-            defineNonMethodSingle(ctx, ref);
+            // We say that the "owner" of fields declared in methods is the method itself.
+            // This is consistent with how we define the owner of contexts during treewalks.
+            if (ref.kind() != core::FoundDefinitionRef::Kind::Field) {
+                defineNonMethodSingle(ctx, ref);
+            }
         }
 
         for (auto &method : foundDefs.methods()) {
@@ -1329,6 +1311,12 @@ public:
                 continue;
             }
             definedMethods.emplace_back(insertMethod(ctx.withOwner(getOwnerSymbol(ctx, method.owner)), method));
+        }
+
+        for (auto ref : foundDefs.nonMethodDefinitions()) {
+            if (ref.kind() == core::FoundDefinitionRef::Kind::Field) {
+                defineNonMethodSingle(ctx, ref);
+            }
         }
 
         for (const auto &modifier : foundDefs.modifiers()) {
