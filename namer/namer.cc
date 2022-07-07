@@ -1111,7 +1111,6 @@ class SymbolDefiner {
         // TODO(froydnj): resolver handles this as an error, so maybe we can't enforce this?
         ENFORCE(ctx.owner.isClassOrModule());
 
-        core::ClassOrModuleRef owner = ctx.owner.asClassOrModuleRef();
         core::ClassOrModuleRef scope;
 
         // resolver checks a whole bunch of various error conditions here; we just want to
@@ -1122,7 +1121,7 @@ class SymbolDefiner {
             scope = ctx.selfClass();
         }
 
-        auto existing = ctx.state.lookupFieldSymbol(owner, field.name);
+        auto existing = ctx.state.lookupFieldSymbol(scope, field.name);
         if (existing.exists()) {
             // There was a previous declaration of this field in this file.  Ignore it;
             // let resolver deal with issuing the appropriate errors.
@@ -1139,9 +1138,9 @@ class SymbolDefiner {
 
         core::FieldRef sym;
         if (field.kind == core::FoundField::Kind::Instance) {
-            sym = ctx.state.enterFieldSymbol(ctx.locAt(field.loc), owner, field.name);
+            sym = ctx.state.enterFieldSymbol(ctx.locAt(field.loc), scope, field.name);
         } else {
-            sym = ctx.state.enterStaticFieldSymbol(ctx.locAt(field.loc), owner, field.name);
+            sym = ctx.state.enterStaticFieldSymbol(ctx.locAt(field.loc), scope, field.name);
         }
 
         sym.data(ctx)->resultType = core::Types::todo();
