@@ -581,9 +581,6 @@ class SymbolDefiner {
             case core::FoundDefinitionRef::Kind::Method:
                 ENFORCE(ref.idx() < definedMethods.size());
                 return definedMethods[ref.idx()];
-            case core::FoundDefinitionRef::Kind::ClassRef:
-                ENFORCE(ref.klassRef(foundDefs).name == core::Names::singleton());
-                return methodOwner(ctx, /*singletonContext=*/true);
             default:
                 Exception::raise("Invalid owner reference");
         }
