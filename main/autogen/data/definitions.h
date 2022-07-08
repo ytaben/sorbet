@@ -172,11 +172,6 @@ struct ParsedFile {
     std::vector<std::string> listAllClasses(core::Context ctx);
 };
 
-struct LocInfo {
-    core::FileRef file;
-    core::LocOffsets loc;
-};
-
 struct PropInfo {
     core::NameRef name;
     bool isTimestamped;
