@@ -2100,7 +2100,7 @@ class ResolveTypeMembersAndFieldsWalk {
                     loc = job.asgn->loc;
                 }
                 job.asgn->rhs = ast::MK::Send1(loc, ast::MK::Constant(loc, core::Symbols::Magic()),
-                                               core::Names::suggestType(), loc.copyWithZeroLength(), move(rhs));
+                                               core::Names::suggestConstantType(), loc.copyWithZeroLength(), move(rhs));
             }
         }
         // Always return the re-derived type, even on the fast path.
